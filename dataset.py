@@ -26,3 +26,12 @@ class Dataset(object):
         file_name = 'S_psd_gloVe_%s.mat' % self.data_name
         mat = scipy.io.loadmat(os.path.join(self.data_dir, file_name))
         return mat['S']
+
+    def load_semantic_hierachy_labels(self, is_training=True):
+        """Loads semantic hierachy as labels with shape of (#tags, #examples)."""
+        file_name = '%s_semantic_hierarchy_structure.mat' % self.data_name
+        mat = scipy.io.loadmat(os.path.join(self.data_dir, file_name), squeeze_me=True, struct_as_record=False)
+        struct = mat['semantic_hierarchy_structure']
+        labels = struct.label_train_SH_augmented if is_training else struct.label_test_SH_augmented
+        labels = labels.toarray()
+        return labels
