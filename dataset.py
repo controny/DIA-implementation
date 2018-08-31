@@ -17,18 +17,21 @@ class Dataset(object):
 
     def load_feat_vectors(self, is_training=True):
         """Loads feature vectors as nparray with shape of (#examples, feature size)."""
+        print('Loading feature vectors...')
         file_name = '%s_data_vggf_pca_%s.txt' % (self.data_name, 'train' if is_training else 'test')
         res = np.loadtxt(os.path.join(self.data_dir, file_name), delimiter=',')
         return res
 
     def load_similarity_matrix(self):
         """Loads S matrix as nparray with shape of (#tags, #tags)."""
+        print('Loading similarity matrix...')
         file_name = 'S_psd_gloVe_%s.mat' % self.data_name
         mat = scipy.io.loadmat(os.path.join(self.data_dir, file_name))
         return mat['S']
 
     def load_semantic_hierachy_labels(self, is_training=True):
         """Loads semantic hierachy as labels with shape of (#examples, #tags)."""
+        print('Loading semantic hierachy labels...')
         file_name = '%s_semantic_hierarchy_structure.mat' % self.data_name
         mat = scipy.io.loadmat(os.path.join(self.data_dir, file_name), squeeze_me=True, struct_as_record=False)
         struct = mat['semantic_hierarchy_structure']
