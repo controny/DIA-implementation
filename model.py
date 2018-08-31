@@ -1,4 +1,5 @@
 import numpy as np
+from utils import timeit
 
 
 class Hyperparams(object):
@@ -73,6 +74,7 @@ class DPPModel(object):
         batch_labels = labels[start:end]
         return batch_features, batch_labels
 
+    @timeit
     def update_weights(self, batch_features, batch_labels, kernels):
         """
         Update weights using SGD.
@@ -95,6 +97,7 @@ class DPPModel(object):
         self.momentum_grad = self.hyperparams.momentum * self.momentum_grad - self.lr * gradient
         self.weights += self.momentum_grad
 
+    @timeit
     def compute_mean_loss(self, batch_labels, kernels):
         """
         Computes mean loss of negative log likehood
@@ -110,6 +113,7 @@ class DPPModel(object):
                   for kernel, sub_kernel in zip(kernels, sub_kernels)]
         return sum(losses) / len(losses)
 
+    @timeit
     def compute_kernels(self, batch_features, similarity_mat):
         """
         Computes kernels for a batch
