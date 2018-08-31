@@ -3,13 +3,16 @@ import numpy as np
 
 class Hyperparams(object):
     """Contains hyper parameters of training."""
-    lr = 20
-    lr_decay = 0.02
-    lr_updated_iters = 50
-    momentum = 0.9
-    batch_size = 1024
-    max_num_epochs = 5
-    regularization_rate = 0.0001
+    def __init__(self, feat_size, num_tags):
+        self.hyperparams.feat_size = feat_size
+        self.hyperparams.num_tags = num_tags
+        self.initial_lr = 20
+        self.lr_decay = 0.02
+        self.lr_updated_iters = 50
+        self.momentum = 0.9
+        self.batch_size = 1024
+        self.max_num_epochs = 5
+        self.regularization_rate = 0.0001
 
 
 class DPPModel(object):
@@ -17,9 +20,10 @@ class DPPModel(object):
 
     def __init__(self, hyperparams):
         """Initializes the model."""
+        self.weights = np.random.rand(self.hyperparams.feat_size, self.hyperparams.num_tags)
+        self.momentum_grad = np.zeros(self.weights.shape)
         self.hyperparams = hyperparams
-        self.weights = None
-        self.momentum_grad = None
+        self.lr = hyperparams.initial_lr
 
     def train(self, features, labels, similarity_mat):
         """
@@ -28,10 +32,6 @@ class DPPModel(object):
         :param labels: (#examples, #tags)
         :param similarity_mat: (#tags, #tags)
         """
-        self.hyperparams.feat_size = features.shape[-1]
-        self.hyperparams.num_tags = labels.shape[-1]
-        self.weights = np.random.rand(self.hyperparams.feat_size, self.hyperparams.num_tags)
-        self.momentum_grad = np.zeros(self.weights.shape)
         cur_iter = 0
         for epoch in range(self.hyperparams.max_num_epochs):
             self.shuffle_data(features, labels)
@@ -43,7 +43,7 @@ class DPPModel(object):
                 cur_iter += 1
                 if self.check_convergence(cur_loss):
                     break
-                # TODO: update learning rate
+                self.update_learning_rate(cur_iter)
 
     def shuffle_data(self, features, labels):
         pass
@@ -59,7 +59,7 @@ class DPPModel(object):
         :param kernels: (batch size, #tags, #tags)
         """
         grads = []
-        for i in len(batch_features):
+        for i in range(len(batch_features)):
             u, s, _ = np.linalg.svd(kernels[i])
             squared_u = u ** 2  # column vectors are vi^2
             transformed_s = s / (s + 1)  # diagonal elements are `\lambda_{i} / (\lambda_{i} + 1)`
@@ -68,7 +68,7 @@ class DPPModel(object):
             cur_grad = np.matmul(batch_features[i], kiis - batch_labels[i])  # same shape as weights
             grads.append(cur_grad)
         gradient = np.mean(grads, axis=0) + self.hyperparams.regularization_rate * self.weights
-        self.momentum_grad = self.hyperparams.momentum * self.momentum_grad - self.hyperparams.lr * gradient
+        self.momentum_grad = self.hyperparams.momentum * self.momentum_grad - self.lr * gradient
         self.weights += self.momentum_grad
 
     def compute_mean_loss(self, batch_labels, kernels):
@@ -104,4 +104,7 @@ class DPPModel(object):
         return -np.log(p)
 
     def check_convergence(self, cur_loss):
+        pass
+
+    def update_learning_rate(self, cur_iter):
         pass
