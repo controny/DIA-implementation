@@ -19,6 +19,7 @@ class DPPModel(object):
         """Initializes the model."""
         self.hyperparams = hyperparams
         self.weights = None
+        self.momentum_grad = None
 
     def train(self, features, labels, similarity_mat):
         """
@@ -30,6 +31,7 @@ class DPPModel(object):
         self.hyperparams.feat_size = features.shape[-1]
         self.hyperparams.num_tags = labels.shape[-1]
         self.weights = np.random.rand(self.hyperparams.feat_size, self.hyperparams.num_tags)
+        self.momentum_grad = np.zeros(self.weights.shape)
         cur_iter = 0
         for epoch in range(self.hyperparams.max_num_epochs):
             self.shuffle_data(features, labels)
@@ -41,6 +43,7 @@ class DPPModel(object):
                 cur_iter += 1
                 if self.check_convergence(cur_loss):
                     break
+                # TODO: update learning rate
 
     def shuffle_data(self, features, labels):
         pass
@@ -49,7 +52,24 @@ class DPPModel(object):
         pass
 
     def update_weights(self, batch_features, batch_labels, kernels):
-        pass
+        """
+        Update weights using SGD.
+        :param batch_features: (batch size, feature size)
+        :param batch_labels: (batch size, #tags)
+        :param kernels: (batch size, #tags, #tags)
+        """
+        grads = []
+        for i in len(batch_features):
+            u, s, _ = np.linalg.svd(kernels[i])
+            squared_u = u ** 2  # column vectors are vi^2
+            transformed_s = s / (s + 1)  # diagonal elements are `\lambda_{i} / (\lambda_{i} + 1)`
+            temp_kiis = np.matmul(squared_u, transformed_s)
+            kiis = np.sum(temp_kiis, axis=1)  # with shape of (#tags, )
+            cur_grad = np.matmul(batch_features[i], kiis - batch_labels[i])  # same shape as weights
+            grads.append(cur_grad)
+        gradient = np.mean(grads, axis=0) + self.hyperparams.regularization_rate * self.weights
+        self.momentum_grad = self.hyperparams.momentum * self.momentum_grad - self.hyperparams.lr * gradient
+        self.weights += self.momentum_grad
 
     def compute_mean_loss(self, batch_labels, kernels):
         """
