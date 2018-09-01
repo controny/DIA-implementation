@@ -1,4 +1,6 @@
 import numpy as np
+import random
+import time
 import matplotlib.pyplot as plt
 from utils import timeit
 
@@ -14,7 +16,7 @@ class Hyperparams(object):
         self.momentum = 0.9
         self.batch_size = 1024
         self.max_num_epochs = 5
-        self.max_iters = 3
+        self.max_iters = 200
         self.regularization_rate = 0.0001
 
 
@@ -70,7 +72,7 @@ class DPPModel(object):
         kernels = self.compute_kernels(batch_features, similarity_mat)
         raw_grad = self.compute_raw_gradient(batch_features, batch_labels, kernels)
         cur_loss = self.compute_mean_loss(batch_labels, kernels)
-        # self.gradient_check(raw_grad, batch_features, batch_labels, similarity_mat)
+        self.gradient_check(raw_grad, batch_features, batch_labels, similarity_mat)
         self.update_weights(raw_grad)
         self.update_learning_rate(global_iter)
         print('Iterations %d: loss = %f' % (global_iter, cur_loss))
@@ -124,7 +126,6 @@ class DPPModel(object):
             grads.append(cur_grad)
         return np.mean(grads, axis=0)
 
-    @timeit
     def update_weights(self, raw_grad):
         """
         Update weights using SGD.
@@ -134,7 +135,6 @@ class DPPModel(object):
         self.momentum_grad = self.hyperparams.momentum * self.momentum_grad - self.lr * gradient
         self.weights += self.momentum_grad
 
-    @timeit
     def compute_mean_loss(self, batch_labels, kernels):
         """
         Computes mean loss of negative log likehood
@@ -190,7 +190,12 @@ class DPPModel(object):
         # Iterate over all indexes iw in weights to check the gradient.
         it = np.nditer(self.weights, flags=['multi_index'], op_flags=['readwrite'])
         while not it.finished:
+            # sample check
+            if random.random() > 0.0001:
+                it.iternext()
+                continue
             iw = it.multi_index
+            print("Checking gradient at index %s" % str(iw))
             delta = 0.0001
             forward = get_loss(self, iw, delta)
             backward = get_loss(self, iw, -delta)
@@ -199,7 +204,6 @@ class DPPModel(object):
             # note that `numerical_grad` is a scalar
             reldiff = abs(numerical_grad - grad[iw]) / max(1, abs(numerical_grad), abs(grad[iw]))
             if reldiff > 1e-5:
-                print("First gradient error found at index %s" % str(iw))
                 print('My gradient = %f but numerical gradient = %f'
                       % (grad, numerical_grad))
                 return
