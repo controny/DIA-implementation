@@ -1,4 +1,5 @@
 import numpy as np
+import matplotlib.pyplot as plt
 from utils import timeit
 
 
@@ -13,6 +14,7 @@ class Hyperparams(object):
         self.momentum = 0.9
         self.batch_size = 1024
         self.max_num_epochs = 5
+        self.max_iters = 3
         self.regularization_rate = 0.0001
 
 
@@ -25,6 +27,7 @@ class DPPModel(object):
         self.weights = np.random.normal(size=(self.hyperparams.feat_size, self.hyperparams.num_tags))
         self.momentum_grad = np.zeros(self.weights.shape)
         self.lr = hyperparams.initial_lr
+        self.losses = []
 
     @timeit
     def train(self, features, labels, similarity_mat):
@@ -35,15 +38,22 @@ class DPPModel(object):
         :param similarity_mat: (#tags, #tags)
         """
         cur_iter = 0
+        stop = False
         for epoch in range(self.hyperparams.max_num_epochs):
             print('=' * 10 + ' Epoch %d ' % epoch + '=' * 10)
             self.shuffle_data(features, labels)
             iters_per_epoch = int(len(features) / self.hyperparams.batch_size)
             for i in range(iters_per_epoch):
                 cur_loss = self.single_train_iteration(features, labels, similarity_mat, cur_iter, i)
+                self.losses.append(cur_loss)
                 cur_iter += 1
-                if self.check_convergence(cur_loss):
+                if cur_iter >= self.hyperparams.max_iters or self.check_convergence(cur_loss):
+                    stop = True
                     break
+            if stop:
+                break
+
+        self.plot_losses(cur_iter, 'data/result.png')
 
     @timeit
     def single_train_iteration(self, features, labels, similarity_mat, global_iter, local_iter):
@@ -60,7 +70,7 @@ class DPPModel(object):
         kernels = self.compute_kernels(batch_features, similarity_mat)
         raw_grad = self.compute_raw_gradient(batch_features, batch_labels, kernels)
         cur_loss = self.compute_mean_loss(batch_labels, kernels)
-        self.gradient_check(raw_grad, batch_features, batch_labels, similarity_mat)
+        # self.gradient_check(raw_grad, batch_features, batch_labels, similarity_mat)
         self.update_weights(raw_grad)
         self.update_learning_rate(global_iter)
         print('Iterations %d: loss = %f' % (global_iter, cur_loss))
@@ -195,3 +205,12 @@ class DPPModel(object):
                 return
             it.iternext()
         print('Gradient check passed!')
+
+    def plot_losses(self, iters, filename):
+        """Plot the losses and save to an image file."""
+        plt.plot(range(iters), self.losses)
+        plt.xscale('log')
+        plt.xlabel("iteration")
+        plt.ylabel("loss")
+        plt.savefig(filename)
+        print('Result image saved at %s' % filename)
