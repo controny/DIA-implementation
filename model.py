@@ -107,13 +107,20 @@ class DPPModel(object):
         """
         # extract corresponding indexes where the element is 1
         batch_label_indexes = [np.nonzero(label)[0] for label in batch_labels]
-        sub_kernels = [kernel[np.ix_(label_indexes, label_indexes)]
-                       for kernel, label_indexes in zip(kernels, batch_label_indexes)]
-        losses = [self.compute_negative_log_likehood(kernel, sub_kernel)
-                  for kernel, sub_kernel in zip(kernels, sub_kernels)]
+        # sub_kernels = [kernel[np.ix_(label_indexes, label_indexes)]
+        #                for kernel, label_indexes in zip(kernels, batch_label_indexes)]
+        # losses = [self.compute_negative_log_likehood(kernel, sub_kernel)
+        #           for kernel, sub_kernel in zip(kernels, sub_kernels)]
+
+        losses = []
+        for i in range(len(kernels)):
+            kernel = kernels[i]
+            label_indexes = batch_label_indexes[i]
+            sub_kernel = kernel[np.ix_(label_indexes, label_indexes)]
+            loss = self.compute_negative_log_likehood(kernel, sub_kernel)
+            losses.append(loss)
         return sum(losses) / len(losses)
 
-    @timeit
     def compute_kernels(self, batch_features, similarity_mat):
         """
         Computes kernels for a batch
