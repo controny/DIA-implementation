@@ -22,10 +22,11 @@ class DPPModel(object):
     def __init__(self, hyperparams):
         """Initializes the model."""
         self.hyperparams = hyperparams
-        self.weights = np.random.rand(self.hyperparams.feat_size, self.hyperparams.num_tags)
+        self.weights = np.random.normal(size=(self.hyperparams.feat_size, self.hyperparams.num_tags))
         self.momentum_grad = np.zeros(self.weights.shape)
         self.lr = hyperparams.initial_lr
 
+    @timeit
     def train(self, features, labels, similarity_mat):
         """
         Trains DPP model given training data.
@@ -39,15 +40,32 @@ class DPPModel(object):
             self.shuffle_data(features, labels)
             iters_per_epoch = int(len(features) / self.hyperparams.batch_size)
             for i in range(iters_per_epoch):
-                batch_features, batch_labels = self.next_batch(features, labels, i)
-                kernels = self.compute_kernels(batch_features, similarity_mat)
-                self.update_weights(batch_features, batch_labels, kernels)
-                cur_loss = self.compute_mean_loss(batch_labels, kernels)
-                print('Iterations %d: loss = %f' % (cur_iter, cur_loss))
+                cur_loss = self.single_train_iteration(features, labels, similarity_mat, cur_iter, i)
                 cur_iter += 1
                 if self.check_convergence(cur_loss):
                     break
-                self.update_learning_rate(cur_iter)
+
+    @timeit
+    def single_train_iteration(self, features, labels, similarity_mat, global_iter, local_iter):
+        """
+        Train a single iteration.
+        :param features: (#examples, feature size)
+        :param labels: (#examples, #tags)
+        :param similarity_mat: (#tags, #tags)
+        :param global_iter: current global steps
+        :param local_iter: current local steps within an epoch
+        :return current loss
+        """
+        batch_features, batch_labels = self.next_batch(features, labels, local_iter)
+        kernels = self.compute_kernels(batch_features, similarity_mat)
+        raw_grad = self.compute_raw_gradient(batch_features, batch_labels, kernels)
+        cur_loss = self.compute_mean_loss(batch_labels, kernels)
+        self.gradient_check(raw_grad, batch_features, batch_labels, similarity_mat)
+        self.update_weights(raw_grad)
+        self.update_learning_rate(global_iter)
+        print('Iterations %d: loss = %f' % (global_iter, cur_loss))
+
+        return cur_loss
 
     @staticmethod
     def shuffle_data(features, labels):
@@ -74,13 +92,14 @@ class DPPModel(object):
         batch_labels = labels[start:end]
         return batch_features, batch_labels
 
-    @timeit
-    def update_weights(self, batch_features, batch_labels, kernels):
+    @staticmethod
+    def compute_raw_gradient(batch_features, batch_labels, kernels):
         """
-        Update weights using SGD.
+        Compute raw mean gradient across a batch without regularization term.
         :param batch_features: (batch size, feature size)
         :param batch_labels: (batch size, #tags)
         :param kernels: (batch size, #tags, #tags)
+        :return mean gradient
         """
         grads = []
         for i in range(len(batch_features)):
@@ -93,7 +112,15 @@ class DPPModel(object):
             # should convert vectors to matrixes
             cur_grad = np.matmul(batch_features[i][:, np.newaxis], (kiis - batch_labels[i])[:, np.newaxis].T)
             grads.append(cur_grad)
-        gradient = np.mean(grads, axis=0) + self.hyperparams.regularization_rate * self.weights
+        return np.mean(grads, axis=0)
+
+    @timeit
+    def update_weights(self, raw_grad):
+        """
+        Update weights using SGD.
+        :param raw_grad: raw gradient without regularization term.
+        """
+        gradient = raw_grad + self.hyperparams.regularization_rate * self.weights
         self.momentum_grad = self.hyperparams.momentum * self.momentum_grad - self.lr * gradient
         self.weights += self.momentum_grad
 
@@ -107,11 +134,6 @@ class DPPModel(object):
         """
         # extract corresponding indexes where the element is 1
         batch_label_indexes = [np.nonzero(label)[0] for label in batch_labels]
-        # sub_kernels = [kernel[np.ix_(label_indexes, label_indexes)]
-        #                for kernel, label_indexes in zip(kernels, batch_label_indexes)]
-        # losses = [self.compute_negative_log_likehood(kernel, sub_kernel)
-        #           for kernel, sub_kernel in zip(kernels, sub_kernels)]
-
         losses = []
         for i in range(len(kernels)):
             kernel = kernels[i]
@@ -144,3 +166,32 @@ class DPPModel(object):
 
     def update_learning_rate(self, cur_iter):
         pass
+
+    def gradient_check(self, grad, batch_features, batch_labels, similarity_mat):
+        """Check if gradient is computed correctily."""
+        # define an internal function to compute loss by change an element of weights temporarily
+        def get_loss(model, indexes, diff):
+            model.weights[indexes] += diff
+            kernels = model.compute_kernels(batch_features, similarity_mat)
+            loss = model.compute_mean_loss(batch_labels, kernels)
+            model.weights[indexes] -= diff
+            return loss
+
+        # Iterate over all indexes iw in weights to check the gradient.
+        it = np.nditer(self.weights, flags=['multi_index'], op_flags=['readwrite'])
+        while not it.finished:
+            iw = it.multi_index
+            delta = 0.0001
+            forward = get_loss(self, iw, delta)
+            backward = get_loss(self, iw, -delta)
+            numerical_grad = (forward - backward) / (2 * delta)
+            # Compare gradients
+            # note that `numerical_grad` is a scalar
+            reldiff = abs(numerical_grad - grad[iw]) / max(1, abs(numerical_grad), abs(grad[iw]))
+            if reldiff > 1e-5:
+                print("First gradient error found at index %s" % str(iw))
+                print('My gradient = %f but numerical gradient = %f'
+                      % (grad, numerical_grad))
+                return
+            it.iternext()
+        print('Gradient check passed!')
