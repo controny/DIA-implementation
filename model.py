@@ -10,7 +10,7 @@ class Hyperparams(object):
     def __init__(self, feat_size, num_tags):
         self.feat_size = feat_size
         self.num_tags = num_tags
-        self.initial_lr = 20
+        self.initial_lr = 50
         self.lr_decay = 0.02
         self.lr_updated_iters = 50
         self.momentum = 0.9
@@ -72,7 +72,7 @@ class DPPModel(object):
         kernels = self.compute_kernels(batch_features, similarity_mat)
         raw_grad = self.compute_raw_gradient(batch_features, batch_labels, kernels)
         cur_loss = self.compute_mean_loss(batch_labels, kernels)
-        self.gradient_check(raw_grad, batch_features, batch_labels, similarity_mat)
+        # self.gradient_check(raw_grad, batch_features, batch_labels, similarity_mat)
         self.update_weights(raw_grad)
         self.update_learning_rate(global_iter)
         print('Iterations %d: loss = %f' % (global_iter, cur_loss))
@@ -153,6 +153,14 @@ class DPPModel(object):
             losses.append(loss)
         return sum(losses) / len(losses)
 
+    def compute_quality_terms(self, batch_features):
+        """
+        Computes quality terms for a batch
+        :param batch_features: (batch size, feature size)
+        :return quality terms with shape of (batch size, #tags)
+        """
+        return np.exp(0.5 * np.matmul(batch_features, self.weights))
+
     def compute_kernels(self, batch_features, similarity_mat):
         """
         Computes kernels for a batch
@@ -160,7 +168,7 @@ class DPPModel(object):
         :param similarity_mat: (#tags, #tags)
         :return (batch size, #tags, #tags)
         """
-        q = np.exp(0.5 * np.matmul(batch_features, self.weights))
+        q = self.compute_quality_terms(batch_features)
         q = np.expand_dims(q, -1)  # (batch size, #tags, 1)
         kernels = np.matmul(q, np.transpose(q, [0, 2, 1])) * similarity_mat
         return kernels
@@ -218,3 +226,107 @@ class DPPModel(object):
         plt.ylabel("loss")
         plt.savefig(filename)
         print('Result image saved at %s' % filename)
+
+    def inference(self, features, semantic_paths, similarity_mat, k1=8, k2=5, num_trials=10):
+        """
+        Inference on multiple features.
+        :param features: (#examples, feature size)
+        :param similarity_mat: (#tags, #tags)
+        :param k1: size of the reduced set at first step
+        :param k2: maximum size of the final result
+        :param num_trials: number of trials to take
+        :return: inference results with shape of (#examples, #tags)
+        """
+        kernels = self.compute_kernels(features, similarity_mat)
+        q = self.compute_quality_terms(features)
+        # TODO: should sort in descending order and partition
+        k1_tags_indexes = np.argpartition(q, -k1, axis=1)[:, range(-k1, 0)]  # (#instances, k1)
+        results = np.zeros([features.shape[0], similarity_mat.shape[0]])
+        for i in range(len(kernels)):
+            kernel = kernels[i]
+            indexes = k1_tags_indexes[i]
+            sub_kernel = kernel[np.ix_(indexes, indexes)]
+            max_weights_sum = 0
+            max_trail = None
+            for t in range(num_trials):
+                trial = self.k_dpp_sample(semantic_paths, k1_tags_indexes[i], sub_kernel, k2)
+                weights_sum = self.get_SP_weights_sum(trial, semantic_paths)
+                if weights_sum > max_weights_sum:
+                    max_weights_sum = weights_sum
+                    max_trail = trial
+            results[i, :] = max_trail
+        return results
+
+    def k_dpp_sample(self, semantic_paths, candidate_tags, kernel, k):
+        """
+        Perform k-dpp sampling for single instance input.
+        """
+        u, lmbdas, _ = np.linalg.svd(kernel)
+        elem_sympolys = self.compute_elementary_symmetric_polynomials(lmbdas, k)
+        # The first phase: select a set of vectors to construct an elementary DPP
+        vector_indexes = []
+        counter = k
+        for n in range(len(candidate_tags)):
+            # here we don't exclude some tags by SP, which will be done by controlling probabilities below
+            rand = random.uniform(0.0, 1.0)
+            if rand < lmbdas[n] * elem_sympolys[k-1][n-1] / elem_sympolys[k][n]:
+                vector_indexes.append(candidate_tags[n])
+                counter -= 1
+                if counter == 0:
+                    break
+        V = u[:, vector_indexes]  # (#candidate tags size, k)
+        # The second phase: sample the answer according to the elementary DPP mentioned above
+        answer = np.zeros([len(candidate_tags)])
+        for _ in range(k):
+            # compute probabilities for each item
+            probs = np.sum(V**2, axis=1)
+            # TODO: set the probabilities of elements in the existing paths as 0
+            probs = probs / np.sum(probs)
+            i = np.random.choices(candidate_tags, p=probs)
+            answer[i] = 1
+            V = self.get_subspace(V, i)
+            self.orthonormalize(V)
+        return answer
+
+    def get_SP_weights_sum(self, tags, semantic_paths):
+        pass
+
+    @staticmethod
+    def get_subspace(V, i):
+        """Gets subspace of V orthogonal to e_{i}."""
+        j = np.nonzero(V[i, :])[0][0]
+        Vj = V[:, j]
+        # remove Vj
+        V = np.delete(V, j, axis=1)
+        # colomn transform
+        V -= np.outer(Vj, V[i, :] / Vj[i])
+        return V
+
+    @staticmethod
+    def orthonormalize(V):
+        """Orthonormalize V using Gram-Schmidt process."""
+        num_cols = V.shape[1]
+        for a in range(0, num_cols):
+            for b in range(0, a):
+                V[:, a] = V[:, a] - np.dot(V[:, a], V[:, b]) * V[:, b]
+            norm = np.linalg.norm(V[:, a])
+            V[:, a] = V[:, a] / norm
+
+    @staticmethod
+    def compute_elementary_symmetric_polynomials(lmbdas, k):
+        """
+        Compute elementary symmetric polynomials recursively
+        and return them as a 2-D array.
+        :param lmbdas eigenvalues
+        :param k size of set
+        :return a 2-D array, where `e[l][n]` denotes e_{l}^{n}
+        """
+        N = len(lmbdas)
+        e = np.zeros([k+1, N+1])
+        # initialize base situations
+        e[0, :] = 1
+        for l in range(1, k+1):
+            for n in range(1, N+1):
+                # note that `lmbdas` has regular index starting from 0, different from the formula
+                e[l][n] = e[l][n-1] + lmbdas[n-1] * e[l-1][n-1]
+        return e
