@@ -10,7 +10,7 @@ class Hyperparams(object):
     def __init__(self, feat_size, num_tags):
         self.feat_size = feat_size
         self.num_tags = num_tags
-        self.initial_lr = 50
+        self.initial_lr = 20
         self.lr_decay = 0.02
         self.lr_updated_iters = 50
         self.momentum = 0.9
