@@ -38,3 +38,11 @@ class Dataset(object):
         labels = struct.label_train_SH_augmented if is_training else struct.label_test_SH_augmented
         labels = labels.toarray().T
         return labels
+
+    def load_semantic_data(self):
+        """Loads semantic data, including SM and SP."""
+        print('Loading semantic hierachy labels...')
+        file_name = '%s_SH_and_SP_structure.mat' % self.data_name
+        mat = scipy.io.loadmat(os.path.join(self.data_dir, file_name), squeeze_me=True, struct_as_record=False)
+        semantic_data = mat['SH_and_SP_structure']
+        return semantic_data

@@ -227,39 +227,47 @@ class DPPModel(object):
         plt.savefig(filename)
         print('Result image saved at %s' % filename)
 
-    def inference(self, features, semantic_paths, similarity_mat, k1=8, k2=5, num_trials=10):
+    def inference(self, features, semantic_data, similarity_mat, k1=8, k2=5, num_trials=10):
         """
         Inference on multiple features.
         :param features: (#examples, feature size)
+        :param semantic_data: an object containing SH and SP
         :param similarity_mat: (#tags, #tags)
         :param k1: size of the reduced set at first step
         :param k2: maximum size of the final result
         :param num_trials: number of trials to take
         :return: inference results with shape of (#examples, #tags)
         """
+        results = np.zeros([features.shape[0], similarity_mat.shape[0]])
         kernels = self.compute_kernels(features, similarity_mat)
         q = self.compute_quality_terms(features)
         # TODO: should sort in descending order and partition
         k1_tags_indexes = np.argpartition(q, -k1, axis=1)[:, range(-k1, 0)]  # (#instances, k1)
-        results = np.zeros([features.shape[0], similarity_mat.shape[0]])
         for i in range(len(kernels)):
             kernel = kernels[i]
             indexes = k1_tags_indexes[i]
             sub_kernel = kernel[np.ix_(indexes, indexes)]
             max_weights_sum = 0
-            max_trail = None
+            max_trial = None
             for t in range(num_trials):
-                trial = self.k_dpp_sample(semantic_paths, k1_tags_indexes[i], sub_kernel, k2)
-                weights_sum = self.get_SP_weights_sum(trial, semantic_paths)
+                trial = self.k_dpp_sample(semantic_data.semantic_hierarchy, k1_tags_indexes[i], sub_kernel, k2)
+                weights_sum = self.get_SP_weights_sum(trial, semantic_data)
                 if weights_sum > max_weights_sum:
                     max_weights_sum = weights_sum
-                    max_trail = trial
-            results[i, :] = max_trail
+                    max_trial = trial
+            # convert index list to global tags representation
+            for index in max_trial:
+                results[i][index] = 1
         return results
 
-    def k_dpp_sample(self, semantic_paths, candidate_tags, kernel, k):
+    def k_dpp_sample(self, semantic_hierarchy, candidate_tags, kernel, k):
         """
         Perform k-dpp sampling for single instance input.
+        :param semantic_hierarchy: contains `ancestor_cell`, `descendant_cell` and so on
+        :param candidate_tags: indexes of k candidate tags
+        :param kernel: kernel matrix
+        :param k: maximum size of the result
+        :return: a list of original indexes of tags
         """
         u, lmbdas, _ = np.linalg.svd(kernel)
         elem_sympolys = self.compute_elementary_symmetric_polynomials(lmbdas, k)
@@ -267,33 +275,66 @@ class DPPModel(object):
         vector_indexes = []
         counter = k
         for n in range(len(candidate_tags)):
-            # here we don't exclude some tags by SP, which will be done by controlling probabilities below
+            # here we don't exclude some tags by SH, which will be done by controlling probabilities below
             rand = random.uniform(0.0, 1.0)
             if rand < lmbdas[n] * elem_sympolys[k-1][n-1] / elem_sympolys[k][n]:
-                vector_indexes.append(candidate_tags[n])
+                vector_indexes.append(n)
                 counter -= 1
                 if counter == 0:
                     break
         V = u[:, vector_indexes]  # (#candidate tags size, k)
         # The second phase: sample the answer according to the elementary DPP mentioned above
-        answer = np.zeros([len(candidate_tags)])
+        num_candidate_tags = len(candidate_tags)
+        answer = []
+        excluded = []
         for _ in range(k):
             # compute probabilities for each item
             probs = np.sum(V**2, axis=1)
-            # TODO: set the probabilities of elements in the existing paths as 0
+            # set the probabilities of the excluded tags as 0
+            for excluded_tag in excluded:
+                probs[excluded_tag] = 0
             probs = probs / np.sum(probs)
-            i = np.random.choices(candidate_tags, p=probs)
-            answer[i] = 1
+            i = np.random.choice(range(num_candidate_tags), p=probs)
+            chosen_tag = candidate_tags[i]
+            answer.append(chosen_tag)
             V = self.get_subspace(V, i)
             self.orthonormalize(V)
+            # update `excluded`
+            to_exclude = [
+                chosen_tag,
+                semantic_hierarchy.ancestor_cell[chosen_tag],
+                semantic_hierarchy.descendant_cell[chosen_tag],
+                self.find_same_semantic_meaning(semantic_hierarchy.same_meaning_pair, chosen_tag)
+            ]
+            self.add_to_excluded_list(excluded, to_exclude)
         return answer
 
-    def get_SP_weights_sum(self, tags, semantic_paths):
+    def get_SP_weights_sum(self, tags, semantic_data):
         pass
 
     @staticmethod
+    def find_same_semantic_meaning(same_meaning_pair, index):
+        """Finds same meaning counterpart using 2-D array"""
+        result = []
+        for pair in same_meaning_pair:
+            if pair[0] == index:
+                result.append(pair[1])
+            elif pair[1] == index:
+                result.append(pair[0])
+        return result
+
+    @staticmethod
+    def add_to_excluded_list(excluded, obj_list):
+        """Add a list of object whose type is int or array to `excluded`"""
+        for obj in obj_list:
+            if type(obj) is int:
+                excluded.append(obj)
+            else:
+                excluded.extend(obj)
+
+    @staticmethod
     def get_subspace(V, i):
-        """Gets subspace of V orthogonal to e_{i}."""
+        """Gets the basis of the subspace of V orthogonal to e_{i}."""
         j = np.nonzero(V[i, :])[0][0]
         Vj = V[:, j]
         # remove Vj
